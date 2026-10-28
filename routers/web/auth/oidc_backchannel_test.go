@@ -3,6 +3,7 @@ package auth
 import (
 	auth_model "code.gitea.io/gitea/models/auth"
 	"code.gitea.io/gitea/models/db"
+	"code.gitea.io/gitea/models/system"
 	"code.gitea.io/gitea/models/unittest"
 	user_model "code.gitea.io/gitea/models/user"
 	"code.gitea.io/gitea/modules/setting"
@@ -83,7 +84,7 @@ func TestBackchannelTokenValidation(t *testing.T) {
 
 }
 
-func TestBackchannelDisablesLinkedAccountAndRejectsReplay(t *testing.T) {
+func TestBackchannelRevokesSessionsAndRejectsReplay(t *testing.T) {
 	if err := unittest.PrepareTestDatabase(); err != nil {
 		t.Fatal(err)
 	}
@@ -96,44 +97,62 @@ func TestBackchannelDisablesLinkedAccountAndRejectsReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u.ProhibitLogin = false
-	other.ProhibitLogin = false
-	if err = user_model.UpdateUserCols(ctx, u, "prohibit_login"); err != nil {
-		t.Fatal(err)
-	}
-	if err = user_model.UpdateUserCols(ctx, other, "prohibit_login"); err != nil {
-		t.Fatal(err)
-	}
-	link := &user_model.ExternalLoginUser{ExternalID: "corp-fixture-subject", UserID: u.ID, LoginSourceID: 987654, Provider: "fixture"}
+	link := &user_model.ExternalLoginUser{ExternalID: "subject", UserID: u.ID, LoginSourceID: 987654, Provider: "fixture"}
 	if _, err = db.GetEngine(ctx).Insert(link); err != nil {
 		t.Fatal(err)
 	}
-	claims := &logoutClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: link.ExternalID, ID: "event-fixture", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}}
-	if err = disableLogoutSubject(ctx, "https://provider.example", link.LoginSourceID, claims); err != nil {
+	if err = auth_model.InsertAuthToken(ctx, &auth_model.AuthToken{ID: "remember-fixture", UserID: u.ID}); err != nil {
 		t.Fatal(err)
+	}
+	claims := &logoutClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: link.ExternalID, ID: "event-fixture", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}}
+	if err = logoutSubject(ctx, "https://provider.example", link.LoginSourceID, claims); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = auth_model.GetAuthTokenByID(ctx, "remember-fixture"); err == nil {
+		t.Fatal("remember-me token remained active")
+	}
+	generation, err := system.SessionGeneration(ctx, u.ID)
+	if err != nil || generation == "" {
+		t.Fatalf("session generation missing: %v", err)
 	}
 	got, err := user_model.GetUserByID(ctx, u.ID)
-	if err != nil || !got.ProhibitLogin {
-		t.Fatalf("linked user not blocked: %v", err)
+	if err != nil || got.ProhibitLogin != u.ProhibitLogin {
+		t.Fatalf("account status changed: %v", err)
 	}
-	gotOther, err := user_model.GetUserByID(ctx, other.ID)
-	if err != nil || gotOther.ProhibitLogin {
+	otherGeneration, err := system.SessionGeneration(ctx, other.ID)
+	if err != nil || otherGeneration != "" {
 		t.Fatalf("other user affected: %v", err)
 	}
-	got.ProhibitLogin = false
-	if err = user_model.UpdateUserCols(ctx, got, "prohibit_login"); err != nil {
+	if err = system.SetSessionGeneration(ctx, u.ID, "subsequent-session"); err != nil {
 		t.Fatal(err)
 	}
-	if err = disableLogoutSubject(ctx, "https://provider.example", link.LoginSourceID, claims); err != nil {
+	if err = logoutSubject(ctx, "https://provider.example", link.LoginSourceID, claims); err != nil {
 		t.Fatal(err)
 	}
-	got, err = user_model.GetUserByID(ctx, u.ID)
-	if err != nil || got.ProhibitLogin {
-		t.Fatalf("replayed event reblocked user: %v", err)
+	generation, err = system.SessionGeneration(ctx, u.ID)
+	if err != nil || generation != "subsequent-session" {
+		t.Fatalf("replay revoked later session: %v", err)
 	}
+	other.ProhibitLogin = true
+	if err = user_model.UpdateUserCols(ctx, other, "prohibit_login"); err != nil {
+		t.Fatal(err)
+	}
+	second := &user_model.ExternalLoginUser{ExternalID: "banned-subject", UserID: other.ID, LoginSourceID: link.LoginSourceID, Provider: "fixture"}
+	if _, err = db.GetEngine(ctx).Insert(second); err != nil {
+		t.Fatal(err)
+	}
+	secondClaims := &logoutClaims{RegisteredClaims: jwt.RegisteredClaims{Subject: second.ExternalID, ID: "separate-event", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}}
+	if err = logoutSubject(ctx, "https://provider.example", second.LoginSourceID, secondClaims); err != nil {
+		t.Fatal(err)
+	}
+	banned, err := user_model.GetUserByID(ctx, other.ID)
+	if err != nil || !banned.ProhibitLogin {
+		t.Fatalf("existing ban was removed: %v", err)
+	}
+
 }
 
-func TestBackchannelHTTPDeactivation(t *testing.T) {
+func TestBackchannelHTTPLogout(t *testing.T) {
 	if err := unittest.PrepareTestDatabase(); err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +216,7 @@ func TestBackchannelHTTPDeactivation(t *testing.T) {
 		t.Fatalf("response %d: %s", resp.Code, resp.Body.String())
 	}
 	result, err := user_model.GetUserByID(db.DefaultContext, user.ID)
-	if err != nil || !result.ProhibitLogin {
-		t.Fatalf("user not disabled: %v", err)
+	if err != nil || result.ProhibitLogin {
+		t.Fatalf("account status changed: %v", err)
 	}
 }

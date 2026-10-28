@@ -6,6 +6,7 @@ package auth
 import (
 	"net/http"
 
+	"code.gitea.io/gitea/models/system"
 	user_model "code.gitea.io/gitea/models/user"
 	"code.gitea.io/gitea/modules/log"
 )
@@ -52,6 +53,15 @@ func (s *Session) Verify(req *http.Request, w http.ResponseWriter, store DataSto
 			// Return the err as-is to keep current signed-in session, in case the err is something like context.Canceled. Otherwise non-existing user (nil, nil) will make the caller clear the signed-in session.
 			return nil, err
 		}
+		return nil, nil
+	}
+
+	generation, err := system.SessionGeneration(req.Context(), id)
+	if err != nil {
+		return nil, err
+	}
+	sessionGeneration, _ := sess.Get(system.SessionGenerationKey).(string)
+	if generation != sessionGeneration {
 		return nil, nil
 	}
 

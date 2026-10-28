@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"code.gitea.io/gitea/models/system"
 	user_model "code.gitea.io/gitea/models/user"
 	"code.gitea.io/gitea/modules/auth/webauthn"
 	"code.gitea.io/gitea/modules/log"
@@ -79,6 +80,15 @@ func handleSignIn(resp http.ResponseWriter, req *http.Request, sess SessionStore
 	_ = sess.Delete("twofaRemember")
 	_ = sess.Delete("webauthnAssertion")
 	_ = sess.Delete("linkAccount")
+	generation, err := system.SessionGeneration(req.Context(), user.ID)
+	if err != nil {
+		log.Error("read session generation: %v", err)
+		return
+	}
+	if err = sess.Set(system.SessionGenerationKey, generation); err != nil {
+		log.Error("set session generation: %v", err)
+		return
+	}
 	err = sess.Set("uid", user.ID)
 	if err != nil {
 		log.Error(fmt.Sprintf("Error setting session: %v", err))

@@ -1,16 +1,16 @@
-# OIDC account deactivation notifications
+# OIDC Back-Channel Logout
 
-This optional integration accepts subject-wide OpenID Connect Back-Channel Logout tokens from one explicitly selected OIDC authentication source. The identity provider must send these notifications only when access to the account is to be disabled. OIDC Back-Channel Logout also covers ordinary logout; do not enable account blocking for a provider that sends ordinary logout events.
-
-Configure the OIDC source and set:
+This optional integration accepts subject-wide OpenID Connect Back-Channel Logout tokens from a configured OIDC authentication source.
 
 ```ini
 [oidc_backchannel]
 AUTH_SOURCE_ID = 2
 ```
 
-Register `https://<gitea-host>/-/oidc-backchannel-logout` with the provider. Omit the setting to disable this endpoint. The source supplies the OIDC discovery URL and client ID; the integration does not depend on a particular provider.
+Register `https://<gitea-host>/-/oidc-backchannel-logout` with the provider. Omit the setting to disable the endpoint. The source supplies discovery URL and client ID.
 
-The handler validates RS256 signatures against the discovered keys, issuer, audience, expiry, issue time, event and subject. It rejects nonce and session-specific `sid` tokens because provider sessions are not tracked. A matching external-login link is required; unknown subjects do not create accounts. The linked account receives Gitea's `prohibit_login` flag, which prevents web, API-token and SSH access. Token identifiers are recorded transactionally to make retries safe; expired records are pruned during later deliveries.
+The handler validates RS256 signature, issuer, audience, expiry, issue time, event and subject. Nonce and session-scoped `sid` tokens are rejected because provider sessions are not tracked. The subject must match an existing external-login link. Successful logout ends the linked account's browser sessions and invalidates remember-me login tokens. It does not block the account, remove SSH keys, revoke API tokens or change local passwords. Existing administrative bans are not modified.
 
-This is an account ban rather than a normal web-session logout. Rehiring does not automatically remove the ban: an administrator must confirm eligibility and enable the account. The provider handles status checks, reliable delivery and retries. Deploy keys, runner credentials, shared accounts and other independent credentials are outside the user's OIDC account.
+Login sessions use a per-user generation stored in the existing app-state table. Logout atomically changes that generation and records the event ID; replay of the same unexpired event does not invalidate newer sessions. An affected user may log in again if their configured authentication provider permits it.
+
+OpenID logout controls sessions only; employee status, access to Git via SSH and API, and service authorization need a separate solution.

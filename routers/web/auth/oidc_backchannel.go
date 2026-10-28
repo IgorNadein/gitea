@@ -151,7 +151,7 @@ func verifyLogout(raw, issuer, clientID string, keys *oidcJWKS) (*logoutClaims, 
 	return claims, nil
 }
 
-func disableLogoutSubject(parent stdcontext.Context, issuer string, sourceID int64, claims *logoutClaims) error {
+func logoutSubject(parent stdcontext.Context, issuer string, sourceID int64, claims *logoutClaims) error {
 	sum := sha256.Sum256([]byte(issuer + "\x00" + claims.ID))
 	key := logoutStatePrefix + hex.EncodeToString(sum[:])
 	return db.WithTx(parent, func(txctx stdcontext.Context) error {
@@ -174,8 +174,11 @@ func disableLogoutSubject(parent stdcontext.Context, issuer string, sourceID int
 			if err != nil {
 				return err
 			}
-			user.ProhibitLogin = true
-			if err = user_model.UpdateUserCols(txctx, user, "prohibit_login"); err != nil {
+			if err = system.SetSessionGeneration(txctx, user.ID, key); err != nil {
+				return err
+			}
+			// Remember-me tokens can otherwise recreate a browser session.
+			if err = auth_model.DeleteAuthTokensByUserID(txctx, user.ID); err != nil {
 				return err
 			}
 		}
@@ -184,9 +187,7 @@ func disableLogoutSubject(parent stdcontext.Context, issuer string, sourceID int
 	})
 }
 
-// BackchannelLogout revokes an entire account when this explicitly configured
-// provider sends subject-wide deactivation notifications. Do not enable for a
-// provider that also sends routine logout events.
+// BackchannelLogout revokes browser sessions for the linked subject.
 func BackchannelLogout(ctx *context.Context) {
 	ctx.Resp.Header().Set("Cache-Control", "no-store")
 	sourceID := setting.CfgProvider.Section("oidc_backchannel").Key("AUTH_SOURCE_ID").MustInt64(0)
@@ -238,7 +239,7 @@ func BackchannelLogout(ctx *context.Context) {
 		ctx.Status(http.StatusBadRequest)
 		return
 	}
-	err = disableLogoutSubject(ctx, discovery.Issuer, sourceID, claims)
+	err = logoutSubject(ctx, discovery.Issuer, sourceID, claims)
 	if err != nil {
 		ctx.Status(http.StatusServiceUnavailable)
 		return

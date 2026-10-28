@@ -13,6 +13,7 @@ import (
 
 	"code.gitea.io/gitea/models/auth"
 	"code.gitea.io/gitea/models/db"
+	"code.gitea.io/gitea/models/system"
 	user_model "code.gitea.io/gitea/models/user"
 	"code.gitea.io/gitea/modules/auth/password"
 	"code.gitea.io/gitea/modules/base"
@@ -848,6 +849,13 @@ func updateSession(ctx *context.Context, deletes []string, updates map[string]an
 	}
 	sess := ctx.Session
 	sessID := sess.ID()
+	if uid, ok := updates["uid"].(int64); ok {
+		generation, err := system.SessionGeneration(ctx, uid)
+		if err != nil {
+			return fmt.Errorf("read session generation: %w", err)
+		}
+		updates[system.SessionGenerationKey] = generation
+	}
 	for _, k := range deletes {
 		if err := sess.Delete(k); err != nil {
 			return fmt.Errorf("delete %v in session[%s]: %w", k, sessID, err)
