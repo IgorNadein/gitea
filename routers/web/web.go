@@ -487,6 +487,7 @@ func registerWebRoutes(m *web.Router) {
 	}, optionsCorsHandler())
 
 	m.Post("/-/markup", reqSignIn, web.Bind(structs.MarkupOption{}), misc.Markup)
+	m.Post("/-/oidc-backchannel-logout", optSignInIgnoreCsrf, auth.BackchannelLogout)
 
 	m.Group("/explore", func() {
 		m.Get("", func(ctx *context.Context) {
